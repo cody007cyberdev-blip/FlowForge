@@ -1,0 +1,105 @@
+version: "3.8"
+
+services:
+  # MySQL Database
+  mysql:
+    image: mysql:8.0
+    container_name: flowforge-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-flowforge_root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-flowforge}
+      MYSQL_USER: ${MYSQL_USER:-flowforge}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-flowforge_pass}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+    networks:
+      - flowforge
+
+  # Redis Cache & Queue
+  redis:
+    image: redis:7-alpine
+    container_name: flowforge-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      timeout: 3s
+      retries: 5
+    networks:
+      - flowforge
+
+  # FlowForge Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: flowforge-app
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      DATABASE_URL: mysql://${MYSQL_USER:-flowforge}:${MYSQL_PASSWORD:-flowforge_pass}@mysql:3306/${MYSQL_DATABASE:-flowforge}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-your-secret-key-change-in-production}
+      CREDENTIAL_MASTER_KEY: ${CREDENTIAL_MASTER_KEY:-your-master-key-change-in-production}
+      VITE_APP_ID: ${VITE_APP_ID}
+      VITE_APP_TITLE: ${VITE_APP_TITLE:-FlowForge}
+      OAUTH_SERVER_URL: ${OAUTH_SERVER_URL:-https://api.manus.im}
+      VITE_OAUTH_PORTAL_URL: ${VITE_OAUTH_PORTAL_URL}
+      BUILT_IN_FORGE_API_URL: ${BUILT_IN_FORGE_API_URL}
+      BUILT_IN_FORGE_API_KEY: ${BUILT_IN_FORGE_API_KEY}
+      VITE_FRONTEND_FORGE_API_URL: ${VITE_FRONTEND_FORGE_API_URL}
+      VITE_FRONTEND_FORGE_API_KEY: ${VITE_FRONTEND_FORGE_API_KEY}
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./:/app
+      - /app/node_modules
+    networks:
+      - flowforge
+    restart: unless-stopped
+
+  # Workflow Scheduler (optional)
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: flowforge-scheduler
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      DATABASE_URL: mysql://${MYSQL_USER:-flowforge}:${MYSQL_PASSWORD:-flowforge_pass}@mysql:3306/${MYSQL_DATABASE:-flowforge}
+      REDIS_URL: redis://redis:6379
+      SCHEDULER_ENABLED: "true"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./:/app
+      - /app/node_modules
+    networks:
+      - flowforge
+    restart: unless-stopped
+    command: node dist/scheduler.js
+
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  flowforge:
+    driver: bridge
