@@ -6,6 +6,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import * as db from "./db";
 
+
 export const appRouter = router({
     // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
   system: systemRouter,
@@ -117,7 +118,21 @@ export const appRouter = router({
         if (!workflow || workflow.userId !== ctx.user.id) {
           throw new TRPCError({ code: "NOT_FOUND" });
         }
-        // Trigger execution (async job)
+
+        // Import runner here to avoid circular dependencies
+        const { runWorkflowWithRetry } = await import("./runner");
+
+        // Execute workflow asynchronously
+        runWorkflowWithRetry({
+          workflowId: input.id,
+          nodes: JSON.parse(workflow.nodes),
+          edges: JSON.parse(workflow.edges),
+          triggerData: input.data,
+          triggerSource: "manual",
+        }).catch(error => {
+          console.error(`Workflow execution failed: ${error}`);
+        });
+
         return { success: true, message: "Workflow execution started", workflowId: input.id };
       }),
   }),
