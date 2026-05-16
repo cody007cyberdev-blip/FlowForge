@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useState, useCallback } from "react";
 import ReactFlow, {
   Node,
   Edge,
@@ -28,6 +28,7 @@ const nodeTypes = {
   action: { label: "HTTP Request", color: "bg-blue-100 border-blue-300" },
   logic: { label: "Condicional", color: "bg-purple-100 border-purple-300" },
   data: { label: "Transformar", color: "bg-orange-100 border-orange-300" },
+  openai: { label: "OpenAI", color: "bg-purple-100 border-purple-400" },
 };
 
 const CustomNode = ({ data, selected }: any) => {
@@ -186,6 +187,67 @@ export function WorkflowEditor({ initialNodes = [], initialEdges = [], onSave }:
                     rows={4}
                   />
                 </div>
+              )}
+
+              {selectedNode.data.type === "openai" && (
+                <>
+                  <div>
+                    <Label>API Key</Label>
+                    <Input
+                      type="password"
+                      placeholder="sk-..."
+                      value={(nodeConfig.apiKey as string) || ""}
+                      onChange={e => updateNodeConfig("apiKey", e.target.value)}
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label>Modo</Label>
+                    <select
+                      value={(nodeConfig.mode as string) || "chat"}
+                      onChange={e => updateNodeConfig("mode", e.target.value)}
+                      className="w-full mt-1 px-3 py-2 border border-slate-300 rounded-md"
+                    >
+                      <option value="chat">Chat Completion (GPT-4)</option>
+                      <option value="embedding">Embeddings</option>
+                      <option value="moderation">Moderation</option>
+                    </select>
+                  </div>
+                  <div>
+                    <Label>Modelo</Label>
+                    <select
+                      value={(nodeConfig.model as string) || "gpt-4"}
+                      onChange={e => updateNodeConfig("model", e.target.value)}
+                      className="w-full mt-1 px-3 py-2 border border-slate-300 rounded-md"
+                    >
+                      <option value="gpt-4">GPT-4</option>
+                      <option value="gpt-4-turbo">GPT-4 Turbo</option>
+                      <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+                    </select>
+                  </div>
+                  <div>
+                    <Label>Prompt</Label>
+                    <textarea
+                      placeholder="Enter your prompt..."
+                      value={(nodeConfig.prompt as string) || ""}
+                      onChange={e => updateNodeConfig("prompt", e.target.value)}
+                      className="w-full mt-1 px-3 py-2 border border-slate-300 rounded-md text-sm"
+                      rows={3}
+                    />
+                  </div>
+                  <div>
+                    <Label>Temperature ({(nodeConfig.temperature as number || 0.7).toFixed(2)})</Label>
+                    <input
+                      type="range"
+                      min="0"
+                      max="2"
+                      step="0.1"
+                      value={(nodeConfig.temperature as number) || 0.7}
+                      onChange={e => updateNodeConfig("temperature", parseFloat(e.target.value))}
+                      className="w-full mt-1"
+                    />
+                  </div>
+                </>
               )}
 
               <Button

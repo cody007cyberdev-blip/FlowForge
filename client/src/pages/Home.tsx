@@ -1,20 +1,42 @@
-import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, Play, Trash2, Eye } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Loader2, Plus, Play, Trash2, Eye, Search } from "lucide-react";
 import { getLoginUrl } from "@/const";
 import { trpc } from "@/lib/trpc";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Link } from "wouter";
+import WorkspaceSwitcher from "@/components/WorkspaceSwitcher";
+import { useAuth } from "@/_core/hooks/useAuth";
 
 export default function Home() {
   const { user, loading, isAuthenticated } = useAuth();
   const [selectedWorkflow, setSelectedWorkflow] = useState<number | null>(null);
+  const [currentWorkspaceId, setCurrentWorkspaceId] = useState<number>();
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
 
   const workflowsQuery = trpc.workflows.list.useQuery(undefined, {
     enabled: isAuthenticated,
   });
+
+  const filterQuery_trpc = trpc.workflows.filter.useQuery(
+    { 
+      query: searchQuery,
+      isActive: statusFilter === "all" ? undefined : statusFilter === "active"
+    },
+    { enabled: isAuthenticated && (searchQuery.length > 0 || statusFilter !== "all") }
+  );
+
+  // Use filter results if active, otherwise use all workflows
+  const displayedWorkflows = useMemo(() => {
+    if ((searchQuery.length > 0 || statusFilter !== "all") && filterQuery_trpc.data) {
+      return filterQuery_trpc.data;
+    }
+    return workflowsQuery.data || [];
+  }, [searchQuery, statusFilter, filterQuery_trpc.data, workflowsQuery.data]);
 
   const executionsQuery = trpc.executions.list.useQuery(
     { workflowId: selectedWorkflow || 0, limit: 10 },
@@ -69,12 +91,21 @@ export default function Home() {
               <h1 className="text-3xl font-bold text-slate-900">FlowForge</h1>
               <p className="text-slate-600 mt-1">Bem-vindo, {user?.name}</p>
             </div>
-            <Link href="/editor">
-              <Button size="lg" className="gap-2">
-                <Plus className="h-5 w-5" />
-                Novo Workflow
-              </Button>
-            </Link>
+            <div className="flex items-center gap-4">
+              <WorkspaceSwitcher currentWorkspaceId={currentWorkspaceId} onWorkspaceChange={setCurrentWorkspaceId} />
+              <Link href="/editor">
+                <Button size="lg" className="gap-2">
+                  <Plus className="h-5 w-5" />
+                  Novo Workflow
+                </Button>
+              </Link>
+              <Link href="/demo">
+                <Button size="lg" variant="outline" className="gap-2">
+                  <Play className="h-5 w-5" />
+                  Ver Demo
+                </Button>
+              </Link>
+            </div>
           </div>
         </div>
       </div>
@@ -127,15 +158,36 @@ export default function Home() {
               <CardHeader>
                 <CardTitle>Meus Workflows</CardTitle>
                 <CardDescription>Gerencie seus workflows</CardDescription>
+                <div className="mt-4 flex gap-3">
+                  <div className="flex-1 relative">
+                    <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                    <Input
+                      placeholder="Pesquisar workflows..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-10"
+                    />
+                  </div>
+                  <Select value={statusFilter} onValueChange={(value: any) => setStatusFilter(value)}>
+                    <SelectTrigger className="w-32">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Todos</SelectItem>
+                      <SelectItem value="active">Ativos</SelectItem>
+                      <SelectItem value="inactive">Inativos</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </CardHeader>
               <CardContent>
-                {workflowsQuery.isLoading ? (
+                {((searchQuery.length > 0 || statusFilter !== "all") ? filterQuery_trpc.isLoading : workflowsQuery.isLoading) ? (
                   <div className="flex justify-center py-8">
                     <Loader2 className="animate-spin h-6 w-6 text-slate-400" />
                   </div>
-                ) : workflowsQuery.data && workflowsQuery.data.length > 0 ? (
+                ) : displayedWorkflows && displayedWorkflows.length > 0 ? (
                   <div className="space-y-3">
-                    {workflowsQuery.data.map(workflow => (
+                    {displayedWorkflows.map(workflow => (
                       <div
                         key={workflow.id}
                         className="flex items-center justify-between p-4 border border-slate-200 rounded-lg hover:bg-slate-50"
@@ -176,12 +228,16 @@ export default function Home() {
                   </div>
                 ) : (
                   <div className="text-center py-8">
-                    <p className="text-slate-500">Nenhum workflow criado</p>
-                    <Link href="/editor">
-                      <Button variant="outline" className="mt-4">
-                        Criar Primeiro
-                      </Button>
-                    </Link>
+                    <p className="text-slate-500">
+                      {searchQuery.length > 0 ? "Nenhum workflow encontrado" : "Nenhum workflow criado"}
+                    </p>
+                    {searchQuery.length === 0 && (
+                      <Link href="/editor">
+                        <Button variant="outline" className="mt-4">
+                          Criar Primeiro
+                        </Button>
+                      </Link>
+                    )}
                   </div>
                 )}
               </CardContent>
@@ -220,7 +276,7 @@ export default function Home() {
                           </span>
                         </div>
                         <p className="text-xs text-slate-500">
-                          {new Date(execution.startTime).toLocaleString()}
+                          {execution.startedAt ? new Date(execution.startedAt).toLocaleString() : 'N/A'}
                         </p>
                       </div>
                     ))}

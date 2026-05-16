@@ -25,10 +25,10 @@ export async function runWorkflow(options: RunnerOptions) {
     // Create execution record
     execution = await db.createExecution({
       workflowId,
+      workspaceId: 1, // TODO: Get from context
       status: "running",
-      startTime,
-      triggerSource,
-      triggerData: JSON.stringify(triggerData),
+      startedAt: startTime,
+      input: JSON.stringify(triggerData),
     });
 
     const executionId = (execution as any)[0]?.id || 1;
@@ -81,13 +81,12 @@ export async function runWorkflow(options: RunnerOptions) {
         await db.createExecutionStep({
           executionId,
           nodeId: node.id,
-          nodeName: node.label,
           nodeType: node.type,
           status: "success",
           input: JSON.stringify(nodeInput),
           output: JSON.stringify(result),
-          startTime: stepStartTime,
-          endTime: stepEndTime,
+          startedAt: stepStartTime,
+          completedAt: stepEndTime,
           duration: stepEndTime.getTime() - stepStartTime.getTime(),
         });
 
@@ -99,12 +98,11 @@ export async function runWorkflow(options: RunnerOptions) {
         await db.createExecutionStep({
           executionId,
           nodeId: node.id,
-          nodeName: node.label,
           nodeType: node.type,
           status: "failed",
           error: String(error),
-          startTime: stepStartTime,
-          endTime: stepEndTime,
+          startedAt: stepStartTime,
+          completedAt: stepEndTime,
           duration: stepEndTime.getTime() - stepStartTime.getTime(),
         });
 
@@ -116,7 +114,7 @@ export async function runWorkflow(options: RunnerOptions) {
     const endTime = new Date();
     await db.updateExecution(executionId, {
       status: "success",
-      endTime,
+      completedAt: endTime,
       duration: endTime.getTime() - startTime.getTime(),
     });
 
@@ -131,7 +129,7 @@ export async function runWorkflow(options: RunnerOptions) {
       await db.updateExecution(executionId, {
         status: "failed",
         error: errorMessage,
-        endTime,
+        completedAt: endTime,
         duration: endTime.getTime() - startTime.getTime(),
       });
     }

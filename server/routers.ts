@@ -1,10 +1,11 @@
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { publicProcedure, router, protectedProcedure } from "./_core/trpc";
-import { z } from "zod";
+import { router, publicProcedure, protectedProcedure } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
+import { z } from "zod";
 import * as db from "./db";
+import { eq, and, inArray } from "drizzle-orm";
 
 
 export const appRouter = router({
@@ -23,6 +24,7 @@ export const appRouter = router({
 
   workflows: router({
     list: protectedProcedure.query(async ({ ctx }) => {
+      // For now, get all workflows for the user (workspace filtering will be added)
       const workflows = await db.getWorkflowsByUserId(ctx.user.id);
       return workflows.map(w => ({
         ...w,
@@ -31,6 +33,42 @@ export const appRouter = router({
         triggerConfig: w.triggerConfig ? JSON.parse(w.triggerConfig) : null,
       }));
     }),
+
+    search: protectedProcedure
+      .input(z.object({ query: z.string().min(1) }))
+      .query(async ({ ctx, input }) => {
+        const workflows = await db.searchWorkflowsByName(ctx.user.id, input.query);
+        return workflows.map(w => ({
+          ...w,
+          nodes: JSON.parse(w.nodes),
+          edges: JSON.parse(w.edges),
+          triggerConfig: w.triggerConfig ? JSON.parse(w.triggerConfig) : null,
+        }));
+      }),
+
+    filter: protectedProcedure
+      .input(z.object({ 
+        query: z.string().optional(),
+        isActive: z.boolean().optional()
+      }))
+      .query(async ({ ctx, input }) => {
+        let workflows;
+        if (input.query && input.isActive !== undefined) {
+          workflows = await db.filterWorkflowsByNameAndStatus(ctx.user.id, input.query, input.isActive);
+        } else if (input.isActive !== undefined) {
+          workflows = await db.filterWorkflowsByStatus(ctx.user.id, input.isActive);
+        } else if (input.query) {
+          workflows = await db.searchWorkflowsByName(ctx.user.id, input.query);
+        } else {
+          workflows = await db.getWorkflowsByUserId(ctx.user.id);
+        }
+        return workflows.map(w => ({
+          ...w,
+          nodes: JSON.parse(w.nodes),
+          edges: JSON.parse(w.edges),
+          triggerConfig: w.triggerConfig ? JSON.parse(w.triggerConfig) : null,
+        }));
+      }),
 
     get: protectedProcedure
       .input(z.object({ id: z.number() }))
@@ -65,7 +103,7 @@ export const appRouter = router({
           edges: JSON.stringify(input.edges),
           trigger: input.trigger,
           triggerConfig: input.triggerConfig ? JSON.stringify(input.triggerConfig) : null,
-          isActive: 0,
+          isActive: false,
         });
         return { success: true, message: "Workflow created successfully" };
       }),
@@ -137,6 +175,36 @@ export const appRouter = router({
       }),
   }),
 
+  llm: router({
+    suggestNodeConfig: protectedProcedure
+      .input(z.object({ nodeType: z.string(), description: z.string() }))
+      .mutation(async ({ input }) => {
+        const { suggestNodeConfig } = await import("./llmAssistant");
+        return await suggestNodeConfig(input.nodeType, input.description);
+      }),
+
+    generateTransform: protectedProcedure
+      .input(z.object({ inputSample: z.any(), outputDescription: z.string() }))
+      .mutation(async ({ input }) => {
+        const { generateTransformExpression } = await import("./llmAssistant");
+        return await generateTransformExpression(input.inputSample, input.outputDescription);
+      }),
+
+    explainError: protectedProcedure
+      .input(z.object({ nodeType: z.string(), errorMessage: z.string(), nodeConfig: z.any() }))
+      .mutation(async ({ input }) => {
+        const { explainExecutionError } = await import("./llmAssistant");
+        return await explainExecutionError(input.nodeType, input.errorMessage, input.nodeConfig);
+      }),
+
+    suggestImprovements: protectedProcedure
+      .input(z.object({ workflowDescription: z.string(), currentNodes: z.any() }))
+      .mutation(async ({ input }) => {
+        const { suggestWorkflowImprovements } = await import("./llmAssistant");
+        return await suggestWorkflowImprovements(input.workflowDescription, input.currentNodes);
+      }),
+  }),
+
   executions: router({
     list: protectedProcedure
       .input(z.object({ workflowId: z.number(), limit: z.number().default(50) }).strict())
@@ -171,12 +239,145 @@ export const appRouter = router({
       }),
   }),
 
-  // TODO: add feature routers here, e.g.
-  // todo: router({
-  //   list: protectedProcedure.query(({ ctx }) =>
-  //     db.getUserTodos(ctx.user.id)
-  //   ),
-  // }),
-});
+  // ============ WORKSPACES ============
+  workspaces: router({
+    list: protectedProcedure.query(async ({ ctx }) => {
+      const { getUserWorkspaces } = await import("./workspaceService");
+      return getUserWorkspaces(ctx.user.id);
+    }),
 
+    create: protectedProcedure
+      .input(z.object({ name: z.string().min(1), description: z.string().optional() }))
+      .mutation(async ({ input, ctx }) => {
+        const { createWorkspace } = await import("./workspaceService");
+        const workspaceId = await createWorkspace(ctx.user.id, input.name, input.description);
+        return { id: workspaceId, success: true };
+      }),
+
+    get: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input, ctx }) => {
+        const { getWorkspaceWithMembers, checkWorkspacePermission } = await import("./workspaceService");
+        const hasAccess = await checkWorkspacePermission(input.id, ctx.user.id, "viewer");
+        if (!hasAccess) throw new TRPCError({ code: "FORBIDDEN" });
+        return getWorkspaceWithMembers(input.id);
+      }),
+
+    update: protectedProcedure
+      .input(z.object({ id: z.number(), name: z.string().optional(), description: z.string().optional() }))
+      .mutation(async ({ input, ctx }) => {
+        const { checkWorkspacePermission, updateWorkspace } = await import("./workspaceService");
+        const hasAccess = await checkWorkspacePermission(input.id, ctx.user.id, "admin");
+        if (!hasAccess) throw new TRPCError({ code: "FORBIDDEN" });
+        await updateWorkspace(input.id, { name: input.name, description: input.description });
+        return { success: true };
+      }),
+
+    delete: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        const { checkWorkspacePermission, deleteWorkspace } = await import("./workspaceService");
+        const hasAccess = await checkWorkspacePermission(input.id, ctx.user.id, "owner");
+        if (!hasAccess) throw new TRPCError({ code: "FORBIDDEN" });
+        await deleteWorkspace(input.id);
+        return { success: true };
+      }),
+
+    addMember: protectedProcedure
+      .input(z.object({ workspaceId: z.number(), userId: z.number(), role: z.enum(["owner", "admin", "editor", "viewer"]) }))
+      .mutation(async ({ input, ctx }) => {
+        const { checkWorkspacePermission, addWorkspaceMember } = await import("./workspaceService");
+        const hasAccess = await checkWorkspacePermission(input.workspaceId, ctx.user.id, "admin");
+        if (!hasAccess) throw new TRPCError({ code: "FORBIDDEN" });
+        await addWorkspaceMember(input.workspaceId, input.userId, input.role);
+        return { success: true };
+      }),
+
+    removeMember: protectedProcedure
+      .input(z.object({ workspaceId: z.number(), userId: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        const { checkWorkspacePermission, removeWorkspaceMember } = await import("./workspaceService");
+        const hasAccess = await checkWorkspacePermission(input.workspaceId, ctx.user.id, "admin");
+        if (!hasAccess) throw new TRPCError({ code: "FORBIDDEN" });
+        await removeWorkspaceMember(input.workspaceId, input.userId);
+        return { success: true };
+      }),
+
+    updateMemberRole: protectedProcedure
+      .input(z.object({ workspaceId: z.number(), userId: z.number(), role: z.enum(["owner", "admin", "editor", "viewer"]) }))
+      .mutation(async ({ input, ctx }) => {
+        const { checkWorkspacePermission, updateWorkspaceMemberRole } = await import("./workspaceService");
+        const hasAccess = await checkWorkspacePermission(input.workspaceId, ctx.user.id, "admin");
+        if (!hasAccess) throw new TRPCError({ code: "FORBIDDEN" });
+        await updateWorkspaceMemberRole(input.workspaceId, input.userId, input.role);
+        return { success: true };
+      }),
+   }),
+
+  templates: router({
+    list: publicProcedure.query(async () => {
+      const { getAllTemplates } = await import("./templates");
+      return getAllTemplates();
+    }),
+
+    get: publicProcedure
+      .input(z.object({ id: z.string() }))
+      .query(async ({ input }) => {
+        const { getTemplate } = await import("./templates");
+        const template = getTemplate(input.id);
+        if (!template) {
+          throw new TRPCError({ code: "NOT_FOUND" });
+        }
+        return template;
+      }),
+
+    byCategory: publicProcedure
+      .input(z.object({ category: z.string() }))
+      .query(async ({ input }) => {
+        const { getTemplatesByCategory } = await import("./templates");
+        return getTemplatesByCategory(input.category);
+      }),
+
+    byDifficulty: publicProcedure
+      .input(z.object({ difficulty: z.enum(["beginner", "intermediate", "advanced"]) }))
+      .query(async ({ input }) => {
+        const { getTemplatesByDifficulty } = await import("./templates");
+        return getTemplatesByDifficulty(input.difficulty);
+      }),
+
+    search: publicProcedure
+      .input(z.object({ tags: z.array(z.string()) }))
+      .query(async ({ input }) => {
+        const { searchTemplatesByTags } = await import("./templates");
+        return searchTemplatesByTags(input.tags);
+      }),
+
+    createFromTemplate: protectedProcedure
+      .input(z.object({ templateId: z.string(), name: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        const { getTemplate } = await import("./templates");
+        const template = getTemplate(input.templateId);
+        if (!template) {
+          throw new TRPCError({ code: "NOT_FOUND" });
+        }
+
+        const workflow = await db.createWorkflow({
+          userId: ctx.user.id,
+          name: input.name,
+          description: template.description,
+          nodes: JSON.stringify(template.nodes),
+          edges: JSON.stringify(template.edges),
+          trigger: "manual",
+          triggerConfig: JSON.stringify({}),
+          isActive: false,
+        });
+
+        return {
+          success: true,
+          message: "Workflow created from template",
+          templateId: input.templateId,
+        };
+      }),
+  }),
+});
 export type AppRouter = typeof appRouter;

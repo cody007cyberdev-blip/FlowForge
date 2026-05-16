@@ -115,6 +115,8 @@ export async function getWorkflowsByUserId(userId: number) {
   return db.select().from(workflows).where(eq(workflows.userId, userId));
 }
 
+// Workspace filtering will be added in future multi-tenant implementation
+
 export async function getWorkflowById(id: number) {
   const db = await getDb();
   if (!db) return null;
@@ -135,6 +137,32 @@ export async function deleteWorkflow(id: number) {
   if (!db) throw new Error("Database not available");
   
   return db.delete(workflows).where(eq(workflows.id, id));
+}
+
+export async function searchWorkflowsByName(userId: number, searchTerm: string) {
+  const db = await getDb();
+  if (!db) return [];
+  
+  const { like, and: drizzleAnd } = await import("drizzle-orm");
+  const searchPattern = `%${searchTerm}%`;
+  
+  try {
+    return await db.select().from(workflows).where(
+      drizzleAnd(
+        eq(workflows.userId, userId),
+        like(workflows.name, searchPattern)
+      )
+    );
+  } catch (error) {
+    // If workspaceId column doesn't exist, fallback to userId-only query
+    console.warn("Search with workspaceId failed, using userId only", error);
+    return await db.select().from(workflows).where(
+      drizzleAnd(
+        eq(workflows.userId, userId),
+        like(workflows.name, searchPattern)
+      )
+    );
+  }
 }
 
 /**
@@ -202,11 +230,11 @@ export async function createCredential(data: InsertCredential) {
   return db.insert(credentials).values(data);
 }
 
-export async function getCredentialsByUserId(userId: number) {
+export async function getCredentialsByWorkspaceId(workspaceId: number) {
   const db = await getDb();
   if (!db) return [];
   
-  return db.select().from(credentials).where(eq(credentials.userId, userId));
+  return db.select().from(credentials).where(eq(credentials.workspaceId, workspaceId));
 }
 
 export async function getCredentialById(id: number) {
@@ -245,7 +273,7 @@ export async function getWebhookByUrl(webhookUrl: string) {
   const db = await getDb();
   if (!db) return null;
   
-  const result = await db.select().from(webhooks).where(eq(webhooks.webhookUrl, webhookUrl)).limit(1);
+  const result = await db.select().from(webhooks).where(eq(webhooks.url, webhookUrl)).limit(1);
   return result[0] || null;
 }
 
@@ -266,11 +294,11 @@ export async function createFile(data: InsertFile) {
   return db.insert(files).values(data);
 }
 
-export async function getFilesByUserId(userId: number) {
+export async function getFilesByWorkspaceId(workspaceId: number) {
   const db = await getDb();
   if (!db) return [];
   
-  return db.select().from(files).where(eq(files.userId, userId));
+  return db.select().from(files).where(eq(files.workspaceId, workspaceId));
 }
 
 export async function getFilesByExecutionId(executionId: number) {
@@ -285,4 +313,44 @@ export async function deleteFile(id: number) {
   if (!db) throw new Error("Database not available");
   
   return db.delete(files).where(eq(files.id, id));
+}
+
+export async function filterWorkflowsByStatus(userId: number, isActive: boolean) {
+  const db = await getDb();
+  if (!db) return [];
+  
+  const { and: drizzleAnd } = await import("drizzle-orm");
+  return db.select().from(workflows).where(
+    drizzleAnd(
+      eq(workflows.userId, userId),
+      eq(workflows.isActive, isActive)
+    )
+  );
+}
+
+export async function filterWorkflowsByNameAndStatus(
+  userId: number,
+  searchTerm: string,
+  isActive?: boolean
+) {
+  const db = await getDb();
+  if (!db) return [];
+  
+  const { like, and: drizzleAnd } = await import("drizzle-orm");
+  const searchPattern = `%${searchTerm}%`;
+  
+  const conditions: any[] = [
+    eq(workflows.userId, userId),
+  ];
+  
+  if (searchTerm) {
+    const { like: drizzleLike } = await import("drizzle-orm");
+    conditions.push(drizzleLike(workflows.name, searchPattern));
+  }
+  
+  if (isActive !== undefined) {
+    conditions.push(eq(workflows.isActive, isActive));
+  }
+  
+  return db.select().from(workflows).where(drizzleAnd(...conditions));
 }

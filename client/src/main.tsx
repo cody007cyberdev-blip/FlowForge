@@ -6,7 +6,33 @@ import { createRoot } from "react-dom/client";
 import superjson from "superjson";
 import App from "./App";
 import { getLoginUrl } from "./const";
+import { NotificationProvider } from "./contexts/NotificationContext";
 import "./index.css";
+
+// Suppress ResizeObserver loop error globally
+if (typeof window !== "undefined") {
+  const originalWarn = console.warn;
+  const originalError = console.error;
+  
+  console.warn = (...args: any[]) => {
+    const message = args[0]?.toString?.() || "";
+    if (message.includes("ResizeObserver loop completed")) return;
+    originalWarn(...args);
+  };
+  
+  console.error = (...args: any[]) => {
+    const message = args[0]?.toString?.() || "";
+    if (message.includes("ResizeObserver loop completed")) return;
+    originalError(...args);
+  };
+  
+  // Also suppress via error event listener
+  window.addEventListener("error", (event) => {
+    if (event.message?.includes("ResizeObserver loop completed")) {
+      event.preventDefault();
+    }
+  });
+}
 
 const queryClient = new QueryClient();
 
@@ -55,7 +81,9 @@ const trpcClient = trpc.createClient({
 createRoot(document.getElementById("root")!).render(
   <trpc.Provider client={trpcClient} queryClient={queryClient}>
     <QueryClientProvider client={queryClient}>
-      <App />
+      <NotificationProvider>
+        <App />
+      </NotificationProvider>
     </QueryClientProvider>
   </trpc.Provider>
 );
